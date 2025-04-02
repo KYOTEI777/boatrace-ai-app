@@ -16,6 +16,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 import joblib
 
+# ✅ ファイル名をアップロード済みファイルに一致させる
 DB_NAME = "boatrace_data.db"
 MODEL_PATH = "boatrace_model.pkl"
 
@@ -29,7 +30,7 @@ def predict_race_outcome_ai(date, jyo_code, race_no):
         return None
 
     conn = sqlite3.connect(DB_NAME)
-    query = '''
+    query = """
         SELECT e.lane, e.exhibition_time, e.straight_time, e.turn_time,
                m.win_rate AS motor_win_rate, m.two_win_rate AS motor_2win,
                n.win_rate AS player_win_rate, n.two_win_rate AS player_2win
@@ -37,7 +38,7 @@ def predict_race_outcome_ai(date, jyo_code, race_no):
         JOIN entries n ON e.jyo_code = n.jyo_code AND e.race_date = n.race_date AND e.race_no = n.race_no AND e.lane = n.lane
         JOIN motors m ON m.jyo_code = n.jyo_code AND m.race_date = n.race_date AND m.motor_no = n.motor_no
         WHERE e.race_date = ? AND e.jyo_code = ? AND e.race_no = ?
-    '''
+    """
     df = pd.read_sql_query(query, conn, params=(date, jyo_code, race_no))
     conn.close()
 
@@ -71,10 +72,7 @@ def run_full_app():
 
     with tab2:
         st.subheader("モデル精度 (Accuracy, F1)")
-        if st.button("モデル再学習＆評価"):
-            model, report_df = train_and_evaluate_model()
-            joblib.dump(model, MODEL_PATH)
-            st.success("モデル再学習・保存完了！")
-            st.dataframe(report_df.round(3))
+        st.info("※ このデモでは再学習機能は省略しています")
+
 if __name__ == "__main__":
     run_full_app()
