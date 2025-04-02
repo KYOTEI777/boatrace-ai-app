@@ -68,3 +68,7 @@ def run_full_app():
             joblib.dump(model, MODEL_PATH)
             st.success("モデル再学習・保存完了！")
             st.dataframe(report_df.round(3))
+
+    run_full_app()
+
+            
