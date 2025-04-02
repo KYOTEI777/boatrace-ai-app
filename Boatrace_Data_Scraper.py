@@ -51,6 +51,36 @@ def predict_race_outcome_ai(date, jyo_code, race_no):
     df["予測(舟券絡み)確率"] = model.predict_proba(X)[:, 1]
     return df.sort_values("予測(舟券絡み)確率", ascending=False)
 
+def train_and_evaluate_model():
+    conn = sqlite3.connect(DB_NAME)
+    query = """
+        SELECT e.lane, e.exhibition_time, e.straight_time, e.turn_time,
+               m.win_rate AS motor_win_rate, m.two_win_rate AS motor_2win,
+               n.win_rate AS player_win_rate, n.two_win_rate AS player_2win,
+               CASE WHEN r.rank <= 3 THEN 1 ELSE 0 END AS target
+        FROM exhibitions e
+        JOIN entries n ON e.jyo_code = n.jyo_code AND e.race_date = n.race_date AND e.race_no = n.race_no AND e.lane = n.lane
+        JOIN motors m ON m.jyo_code = n.jyo_code AND m.race_date = n.race_date AND m.motor_no = n.motor_no
+        JOIN results r ON r.jyo_code = e.jyo_code AND r.race_date = e.race_date AND r.race_no = e.race_no AND r.lane = e.lane
+    """
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+
+    if df.empty:
+        st.warning("学習用データが存在しません")
+        return None, None
+
+    X = df[["exhibition_time", "straight_time", "turn_time", "motor_win_rate", "motor_2win", "player_win_rate", "player_2win", "lane"]]
+    y = df["target"]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
+
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    report = classification_report(y_test, y_pred, output_dict=True)
+    report_df = pd.DataFrame(report).transpose()
+    return model, report_df
+
 def run_full_app():
     st.set_page_config(page_title="ボートレース分析", layout="wide")
     st.title("🚤 ボートレース分析＆予測ツール")
@@ -73,9 +103,10 @@ def run_full_app():
         st.subheader("モデル精度 (Accuracy, F1)")
         if st.button("モデル再学習＆評価"):
             model, report_df = train_and_evaluate_model()
-            joblib.dump(model, MODEL_PATH)
-            st.success("モデル再学習・保存完了！")
-            st.dataframe(report_df.round(3))
+            if model and report_df is not None:
+                joblib.dump(model, MODEL_PATH)
+                st.success("モデル再学習・保存完了！")
+                st.dataframe(report_df.round(3))
 
 if __name__ == "__main__":
     run_full_app()
