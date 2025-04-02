@@ -21,6 +21,7 @@ def predict_race_outcome_ai(date, jyo_code, race_no):
     try:
         model = joblib.load(MODEL_PATH)
     except:
+        st.error("❌ モデルの読み込みに失敗しました")
         return None
 
     conn = sqlite3.connect(DB_NAME)
@@ -29,12 +30,19 @@ def predict_race_outcome_ai(date, jyo_code, race_no):
                m.win_rate AS motor_win_rate, m.two_win_rate AS motor_2win,
                n.win_rate AS player_win_rate, n.two_win_rate AS player_2win
         FROM exhibitions e
-        JOIN entries n ON e.jyo_code = n.jyo_code AND e.race_date = n.race_date AND e.race_no = n.race_no AND e.lane = n.lane
-        JOIN motors m ON m.jyo_code = n.jyo_code AND m.race_date = n.race_date AND m.motor_no = n.motor_no
+        JOIN entries n ON
+            e.jyo_code = n.jyo_code AND e.race_date = n.race_date AND
+            e.race_no = n.race_no AND e.lane = n.lane
+        JOIN motors m ON
+            m.jyo_code = n.jyo_code AND m.race_date = n.race_date AND
+            m.motor_no = n.motor_no
         WHERE e.race_date = ? AND e.jyo_code = ? AND e.race_no = ?
     """
     df = pd.read_sql_query(query, conn, params=(date, jyo_code, race_no))
     conn.close()
+
+    st.write("🔍 取得件数：", len(df))
+    st.dataframe(df)
 
     if df.empty:
         return None
