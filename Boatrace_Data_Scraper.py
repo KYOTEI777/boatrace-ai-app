@@ -110,3 +110,47 @@ def run_full_app():
 
 if __name__ == "__main__":
     run_full_app()
+
+
+def train_and_compare_models():
+    conn = sqlite3.connect(DB_NAME)
+    query = """
+        SELECT e.lane, e.exhibition_time, e.straight_time, e.turn_time,
+               m.win_rate AS motor_win_rate, m.two_win_rate AS motor_2win,
+               n.win_rate AS player_win_rate, n.two_win_rate AS player_2win,
+               CASE WHEN r.rank <= 3 THEN 1 ELSE 0 END AS target
+        FROM exhibitions e
+        JOIN entries n ON e.jyo_code = n.jyo_code AND e.race_date = n.race_date AND e.race_no = n.race_no AND e.lane = n.lane
+        JOIN motors m ON m.jyo_code = n.jyo_code AND m.race_date = n.race_date AND m.motor_no = n.motor_no
+        JOIN results r ON r.jyo_code = e.jyo_code AND r.race_date = e.race_date AND r.race_no = e.race_no AND r.lane = e.lane
+    """
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+
+    if df.empty:
+        st.warning("学習用データが存在しません")
+        return None
+
+    X = df[["exhibition_time", "straight_time", "turn_time", "motor_win_rate", "motor_2win", "player_win_rate", "player_2win", "lane"]]
+    y = df["target"]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
+
+    models = {
+        "ランダムフォレスト": RandomForestClassifier(n_estimators=100, random_state=42),
+        "ニューラルネット": MLPClassifier(hidden_layer_sizes=(50, 25), max_iter=1000, random_state=42)
+    }
+
+    results = []
+    for name, model in models.items():
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+        report = classification_report(y_test, y_pred, output_dict=True)
+        accuracy = report["accuracy"]
+        f1 = report["1"]["f1-score"]
+        results.append({
+            "モデル名": name,
+            "Accuracy": round(accuracy, 3),
+            "F1スコア": round(f1, 3)
+        })
+
+    return pd.DataFrame(results)
