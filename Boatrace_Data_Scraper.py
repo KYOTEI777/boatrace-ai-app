@@ -13,6 +13,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 import joblib
+from mizumono import create_weather_table, render_mizumono_tab, add_weather_features_to_df, get_mizumono_score
 
 DB_NAME = "boatrace_data.db"
 MODEL_PATH = "boatrace_model.pkl"
@@ -39,6 +40,36 @@ def predict_race_outcome_ai(date, jyo_code, race_no):
         WHERE e.race_date = ? AND e.jyo_code = ? AND e.race_no = ?
     """
     df = pd.read_sql_query(query, conn, params=(date, jyo_code, race_no))
+
+    # 水もの特徴量を追加（weather テーブルがある場合）
+    try:
+        create_weather_table(conn)
+        weather_query = """
+            SELECT wind_speed, wave_height, water_temp
+            FROM weather
+            WHERE race_date = ? AND jyo_code = ? AND race_no = ?
+        """
+        weather_df = pd.read_sql_query(weather_query, conn, params=(date, jyo_code, race_no))
+        if not weather_df.empty:
+            w = weather_df.iloc[0]
+            df["wind_speed"] = w["wind_speed"]
+            df["wave_height"] = w["wave_height"]
+            df["water_temp"] = w["water_temp"]
+            df["mizumono_score"] = df.apply(
+                lambda r: get_mizumono_score(r["wind_speed"], r["wave_height"], r["water_temp"]),
+                axis=1
+            )
+        else:
+            df["wind_speed"] = 0.0
+            df["wave_height"] = 0.0
+            df["water_temp"] = 20.0
+            df["mizumono_score"] = 0.0
+    except Exception:
+        df["wind_speed"] = 0.0
+        df["wave_height"] = 0.0
+        df["water_temp"] = 20.0
+        df["mizumono_score"] = 0.0
+
     conn.close()
 
     st.write("🔍 取得件数：", len(df))
@@ -47,22 +78,50 @@ def predict_race_outcome_ai(date, jyo_code, race_no):
     if df.empty:
         return None
 
-    X = df[["exhibition_time", "straight_time", "turn_time", "motor_win_rate", "motor_2win", "player_win_rate", "player_2win", "lane"]]
-    df["予測(舟券絡み)確率"] = model.predict_proba(X)[:, 1]
+    base_features = ["exhibition_time", "straight_time", "turn_time",
+                     "motor_win_rate", "motor_2win", "player_win_rate", "player_2win", "lane"]
+    mizumono_features = ["wind_speed", "wave_height", "water_temp", "mizumono_score"]
+
+    # モデルが水もの特徴量に対応しているか確認してフォールバック
+    try:
+        X = df[base_features + mizumono_features]
+        df["予測(舟券絡み)確率"] = model.predict_proba(X)[:, 1]
+    except Exception:
+        X = df[base_features]
+        df["予測(舟券絡み)確率"] = model.predict_proba(X)[:, 1]
+
     return df.sort_values("予測(舟券絡み)確率", ascending=False)
 
-def train_and_evaluate_model():
+def train_and_evaluate_model(use_mizumono=False):
     conn = sqlite3.connect(DB_NAME)
-    query = """
-        SELECT e.lane, e.exhibition_time, e.straight_time, e.turn_time,
-               m.win_rate AS motor_win_rate, m.two_win_rate AS motor_2win,
-               n.win_rate AS player_win_rate, n.two_win_rate AS player_2win,
-               CASE WHEN r.rank <= 3 THEN 1 ELSE 0 END AS target
-        FROM exhibitions e
-        JOIN entries n ON e.jyo_code = n.jyo_code AND e.race_date = n.race_date AND e.race_no = n.race_no AND e.lane = n.lane
-        JOIN motors m ON m.jyo_code = n.jyo_code AND m.race_date = n.race_date AND m.motor_no = n.motor_no
-        JOIN results r ON r.jyo_code = e.jyo_code AND r.race_date = e.race_date AND r.race_no = e.race_no AND r.lane = e.lane
-    """
+
+    if use_mizumono:
+        query = """
+            SELECT e.lane, e.exhibition_time, e.straight_time, e.turn_time,
+                   m.win_rate AS motor_win_rate, m.two_win_rate AS motor_2win,
+                   n.win_rate AS player_win_rate, n.two_win_rate AS player_2win,
+                   COALESCE(w.wind_speed, 0.0) AS wind_speed,
+                   COALESCE(w.wave_height, 0.0) AS wave_height,
+                   COALESCE(w.water_temp, 20.0) AS water_temp,
+                   CASE WHEN r.rank <= 3 THEN 1 ELSE 0 END AS target
+            FROM exhibitions e
+            JOIN entries n ON e.jyo_code = n.jyo_code AND e.race_date = n.race_date AND e.race_no = n.race_no AND e.lane = n.lane
+            JOIN motors m ON m.jyo_code = n.jyo_code AND m.race_date = n.race_date AND m.motor_no = n.motor_no
+            JOIN results r ON r.jyo_code = e.jyo_code AND r.race_date = e.race_date AND r.race_no = e.race_no AND r.lane = e.lane
+            LEFT JOIN weather w ON w.jyo_code = e.jyo_code AND w.race_date = e.race_date AND w.race_no = e.race_no
+        """
+    else:
+        query = """
+            SELECT e.lane, e.exhibition_time, e.straight_time, e.turn_time,
+                   m.win_rate AS motor_win_rate, m.two_win_rate AS motor_2win,
+                   n.win_rate AS player_win_rate, n.two_win_rate AS player_2win,
+                   CASE WHEN r.rank <= 3 THEN 1 ELSE 0 END AS target
+            FROM exhibitions e
+            JOIN entries n ON e.jyo_code = n.jyo_code AND e.race_date = n.race_date AND e.race_no = n.race_no AND e.lane = n.lane
+            JOIN motors m ON m.jyo_code = n.jyo_code AND m.race_date = n.race_date AND m.motor_no = n.motor_no
+            JOIN results r ON r.jyo_code = e.jyo_code AND r.race_date = e.race_date AND r.race_no = e.race_no AND r.lane = e.lane
+        """
+
     df = pd.read_sql_query(query, conn)
     conn.close()
 
@@ -70,7 +129,18 @@ def train_and_evaluate_model():
         st.warning("学習用データが存在しません")
         return None, None
 
-    X = df[["exhibition_time", "straight_time", "turn_time", "motor_win_rate", "motor_2win", "player_win_rate", "player_2win", "lane"]]
+    base_features = ["exhibition_time", "straight_time", "turn_time",
+                     "motor_win_rate", "motor_2win", "player_win_rate", "player_2win", "lane"]
+    if use_mizumono:
+        df["mizumono_score"] = df.apply(
+            lambda r: get_mizumono_score(r["wind_speed"], r["wave_height"], r["water_temp"]),
+            axis=1
+        )
+        features = base_features + ["wind_speed", "wave_height", "water_temp", "mizumono_score"]
+    else:
+        features = base_features
+
+    X = df[features]
     y = df["target"]
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
 
@@ -85,7 +155,7 @@ def run_full_app():
     st.set_page_config(page_title="ボートレース分析", layout="wide")
     st.title("🚤 ボートレース分析＆予測ツール")
 
-    tab1, tab2 = st.tabs(["AI展開予測", "モデル評価"])
+    tab1, tab2, tab3 = st.tabs(["AI展開予測", "モデル評価", "🌊 水もの分析"])
 
     with tab1:
         st.subheader("AIによる着順絡み予測")
@@ -101,12 +171,19 @@ def run_full_app():
 
     with tab2:
         st.subheader("モデル精度 (Accuracy, F1)")
+        use_mz = st.checkbox("水もの特徴量を使用（wind_speed / wave_height / water_temp）", value=False)
         if st.button("モデル再学習＆評価"):
-            model, report_df = train_and_evaluate_model()
+            model, report_df = train_and_evaluate_model(use_mizumono=use_mz)
             if model and report_df is not None:
                 joblib.dump(model, MODEL_PATH)
                 st.success("モデル再学習・保存完了！")
                 st.dataframe(report_df.round(3))
+
+    with tab3:
+        conn = sqlite3.connect(DB_NAME)
+        create_weather_table(conn)
+        render_mizumono_tab(conn)
+        conn.close()
 
 if __name__ == "__main__":
     run_full_app()
