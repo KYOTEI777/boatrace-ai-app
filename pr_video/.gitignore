@@ -1,0 +1,9 @@
+.env
+output/*.mp4
+output/*.mp3
+assets/mizumono.jpg
+assets/*.mp3
+assets/*.wav
+__pycache__/
+*.pyc
+temp_audio.m4a
